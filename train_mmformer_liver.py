@@ -31,7 +31,7 @@ Modality groups (unchanged):
 Usage:
   python train_mmformer_liver.py \
       --datapath /path/to/preprocess_nii_256x32_1 \
-      --savepath ./output --resize_x 128 --resize_y 128 --resize_z 16
+      --savepath ./output --resize_x 256 --resize_y 256 --resize_z 32
 
 ══════════════════════════════════════════════════════════════════════════════
 TERMINAL COMMANDS — mmFormer training
@@ -91,6 +91,17 @@ except ImportError:
     from torch.cuda.amp import autocast as _autocast, GradScaler as _GradScaler
     def make_autocast(enabled): return _autocast(enabled=enabled)
     def make_scaler(enabled): return _GradScaler(enabled=enabled)
+
+# custom_fwd shim: prefer the modern torch.amp API (device_type='cuda'),
+# fall back to the deprecated torch.cuda.amp API on older PyTorch.
+try:
+    from torch.amp import custom_fwd as _custom_fwd
+    def amp_custom_fwd(cast_inputs=torch.float32):
+        return _custom_fwd(device_type="cuda", cast_inputs=cast_inputs)
+except (ImportError, TypeError):
+    from torch.cuda.amp import custom_fwd as _custom_fwd
+    def amp_custom_fwd(cast_inputs=torch.float32):
+        return _custom_fwd(cast_inputs=cast_inputs)
 from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
 try:
@@ -194,7 +205,7 @@ def discover_patients(root: str):
     return patients
 
 
-def split_patients(patients, train_ratio=0.8, val_ratio=0.1):
+def split_patients(patients, train_ratio=0.7, val_ratio=0.2):
     n = len(patients)
     n_train = max(1, int(round(n * train_ratio)))
     n_val   = max(1, int(round(n * val_ratio)))
@@ -217,11 +228,10 @@ def resize_volume(vol, target_shape, order=1):
 
 
 def normalize_volume(vol):
-    mask = vol > 0
-    if mask.sum() == 0:
+    vmin, vmax = float(vol.min()), float(vol.max())
+    if vmax - vmin < 1e-8:
         return vol
-    m, s = vol[mask].mean(), vol[mask].std() + 1e-8
-    return (vol - m) / s
+    return (vol - vmin) / (vmax - vmin)
 
 
 def preprocess_patient(root, name, shape):
@@ -1377,7 +1387,7 @@ class KineticContrastiveLoss(nn.Module):
             nn.Linear(in_ch, proj_ch), nn.ReLU(inplace=True),
             nn.Linear(proj_ch, proj_ch))
 
-    @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+    @amp_custom_fwd(cast_inputs=torch.float32)
     def forward(self, z_k, target_onehot):
         z_k = z_k.float()
         B, C, H, W, Z = z_k.shape
@@ -1428,7 +1438,7 @@ class CompletenessAwareDistillationLoss(nn.Module):
         self.T       = temperature
         self.max_loss = max_loss
 
-    @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
+    @amp_custom_fwd(cast_inputs=torch.float32)
     def forward(self, logits_teacher, logits_student):
         logits_teacher = logits_teacher.float().detach()
         logits_student = logits_student.float()
@@ -1597,13 +1607,13 @@ def test_all_combinations(model, test_loader, args, save_dir):
         m, s, md = arr.mean(), arr.std(), np.median(arr)
         results[combo_name] = {"mean": m, "std": s, "median": md, "scores": arr.tolist()}
         all_combo_dice.append(arr)
-        logging.info(f"  {combo_name}: ${m:.3f}\ +/- {s:.3f}({md:.3f})")
+        logging.info(f"  {combo_name}: {m:.3f} ± {s:.3f} ({md:.3f})")
 
     flat = np.concatenate(all_combo_dice)
     results["Average"] = {"mean": flat.mean(), "std": flat.std(),
                           "median": np.median(flat)}
-    logging.info(f"  Average: ${flat.mean():.3f}\ +/- {flat.std():.3f}"
-                 f"({np.median(flat):.3f})")
+    logging.info(f"  Average: {flat.mean():.3f} ± {flat.std():.3f}"
+                 f" ({np.median(flat):.3f})")
     sav = {k: {kk: float(vv) for kk, vv in v.items() if kk != "scores"}
            for k, v in results.items()}
     with open(os.path.join(save_dir, "test_results.json"), "w") as f:
@@ -1778,11 +1788,11 @@ def _print_results(results):
     print("=" * 70)
     for name, _ in TEST_COMBINATIONS:
         r = results[name]
-        print(f"  {name:25s}:  ${r['mean']:.3f}\ +/- {r['std']:.3f}"
-              f"({r['median']:.3f})")
+        print(f"  {name:25s}:  {r['mean']:.3f} ± {r['std']:.3f}"
+              f" ({r['median']:.3f})")
     r = results["Average"]
-    print(f"  {'Average':25s}:  ${r['mean']:.3f}\ +/- {r['std']:.3f}"
-          f"({r['median']:.3f})")
+    print(f"  {'Average':25s}:  {r['mean']:.3f} ± {r['std']:.3f}"
+          f" ({r['median']:.3f})")
     print("=" * 70)
 
 

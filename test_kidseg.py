@@ -89,6 +89,7 @@ except ImportError:
 
 from scipy.ndimage import zoom as scipy_zoom
 from scipy.ndimage import binary_erosion, distance_transform_edt
+from scipy.stats import wilcoxon
 from sklearn.manifold import TSNE
 
 import matplotlib
@@ -184,7 +185,7 @@ def discover_patients(root: str):
     return patients
 
 
-def split_patients(patients, train_ratio=0.8, val_ratio=0.1):
+def split_patients(patients, train_ratio=0.7, val_ratio=0.2):
     n = len(patients)
     n_train = max(1, int(round(n * train_ratio)))
     n_val = max(1, int(round(n * val_ratio)))
@@ -207,11 +208,10 @@ def resize_volume(vol, target_shape, order=1):
 
 
 def normalize_volume(vol):
-    mask = vol > 0
-    if mask.sum() == 0:
+    vmin, vmax = float(vol.min()), float(vol.max())
+    if vmax - vmin < 1e-8:
         return vol
-    m, s = vol[mask].mean(), vol[mask].std() + 1e-8
-    return (vol - m) / s
+    return (vol - vmin) / (vmax - vmin)
 
 
 def preprocess_patient(root, name, shape):
@@ -1114,34 +1114,114 @@ def save_results_json(dice_results, hd95_results, save_dir):
     logging.info(f"Results saved to {path}")
 
 
-def save_results_latex(dice_results, hd95_results, save_dir):
-    """Save a LaTeX table snippet."""
-    def _cell(d_or_h):
-        m   = d_or_h["mean"]
-        s   = d_or_h["std"]
-        med = d_or_h["median"]
-        return f"{m:.3f} +/- {s:.3f} ({med:.3f})"
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6b. STATISTICAL SIGNIFICANCE — two-sided Wilcoxon signed-rank test (p < 0.05)
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    lines = []
-    lines.append(r"\begin{tabular}{l c c}")
-    lines.append(r"\toprule")
-    lines.append(r"Combination & Dice & HD95 \\")
-    lines.append(r"\midrule")
-    for name, _ in TEST_COMBINATIONS:
-        d = dice_results[name]
-        h = hd95_results[name]
-        lines.append(f"{name} & {_cell(d)} & {_cell(h)} \\")
-    lines.append(r"\midrule")
-    d = dice_results["Average"]
-    h = hd95_results["Average"]
-    lines.append(f"Average & {_cell(d)} & {_cell(h)} \\")
-    lines.append(r"\bottomrule")
-    lines.append(r"\end{tabular}")
+def paired_wilcoxon(scores_a, scores_b):
+    """Two-sided Wilcoxon signed-rank test on paired per-subject scores.
 
-    path = os.path.join(save_dir, "test_results_table.tex")
+    Pairs holding a non-finite value (e.g. HD95 = inf when a mask is empty) are
+    dropped before testing; no subject is excluded based on its performance.
+    Returns (statistic, p_value, n_pairs). When the test is undefined (no usable
+    pairs, or all paired differences are zero) the p-value defaults to 1.0.
+    """
+    a = np.asarray(scores_a, dtype=float)
+    b = np.asarray(scores_b, dtype=float)
+    n = min(a.shape[0], b.shape[0])
+    a, b = a[:n], b[:n]
+    finite = np.isfinite(a) & np.isfinite(b)
+    a, b = a[finite], b[finite]
+    if a.size == 0 or np.allclose(a, b):
+        return float("nan"), 1.0, int(a.size)
+    try:
+        stat, p = wilcoxon(a, b, alternative="two-sided", zero_method="wilcox")
+    except ValueError:
+        return float("nan"), 1.0, int(a.size)
+    return float(stat), float(p), int(a.size)
+
+
+def _fmt_pvalue(p):
+    """Format a p-value with an explicit verdict (no dagger / star markers)."""
+    if p != p:  # NaN → undefined
+        return "n/a"
+    return f"{p:.4g} ({'significant' if p < 0.05 else 'n.s.'})"
+
+
+def save_per_subject_scores(dice_results, hd95_results, save_dir):
+    """Persist per-subject Dice/HD95 scores so another method can be compared
+    against this one via --compare_json (paired Wilcoxon signed-rank test)."""
+    out = {"dice": {}, "hd95": {}}
+    for combo_name, _ in TEST_COMBINATIONS:
+        out["dice"][combo_name] = dice_results.get(combo_name, {}).get("scores", [])
+        out["hd95"][combo_name] = hd95_results.get(combo_name, {}).get("scores", [])
+    path = os.path.join(save_dir, "per_subject_scores.json")
     with open(path, "w") as f:
-        f.write("\n".join(lines))
-    logging.info(f"LaTeX table saved to {path}")
+        json.dump(out, f, indent=2)
+    logging.info(f"Per-subject scores saved to {path}")
+
+
+def statistical_significance_test(dice_results, hd95_results, args,
+                                  ref_combo="G1+G2+G3+G4"):
+    """Two-sided Wilcoxon signed-rank tests (p < 0.05), reported as p-values.
+
+    (A) Within-model: each modality combination vs. the full-modality reference,
+        paired per patient (always runs).
+    (B) Cross-method: when --compare_json is given, compare this model against a
+        reference method's per-subject scores, per combination and overall — this
+        reproduces the manuscript's method-vs-method significance analysis.
+
+    Significance is reported as numeric p-values with an explicit verdict; no
+    dagger or star markers are printed.
+    """
+    def _scores(results, combo):
+        return results.get(combo, {}).get("scores", [])
+
+    print("\n" + "=" * 88)
+    print("STATISTICAL SIGNIFICANCE - two-sided Wilcoxon signed-rank test (p < 0.05)")
+    print("=" * 88)
+
+    # ── (A) Within-model: each combination vs. the full-modality reference ──
+    print(f"(A) Each combination vs. full-modality '{ref_combo}' (paired per patient):")
+    print(f"  {'Combination':16s} | {'DSC p-value':26s} | {'HD95 p-value':26s} | n")
+    print("-" * 88)
+    ref_d, ref_h = _scores(dice_results, ref_combo), _scores(hd95_results, ref_combo)
+    for combo_name, _ in TEST_COMBINATIONS:
+        if combo_name == ref_combo:
+            continue
+        _, pd_, nd = paired_wilcoxon(_scores(dice_results, combo_name), ref_d)
+        _, ph_, _ = paired_wilcoxon(_scores(hd95_results, combo_name), ref_h)
+        print(f"  {combo_name:16s} | {_fmt_pvalue(pd_):26s} | {_fmt_pvalue(ph_):26s} | {nd}")
+
+    # ── (B) Cross-method comparison (optional, --compare_json) ──
+    compare_path = getattr(args, "compare_json", None)
+    if not compare_path:
+        print("\n(B) Cross-method test skipped - pass --compare_json "
+              "<other_method>/per_subject_scores.json to enable.")
+        return
+    if not os.path.isfile(compare_path):
+        print(f"\n(B) Cross-method test skipped - file not found: {compare_path}")
+        return
+
+    with open(compare_path) as f:
+        ref = json.load(f)
+    ref_dice, ref_hd95 = ref.get("dice", {}), ref.get("hd95", {})
+    print(f"\n(B) This model vs. reference '{compare_path}' (paired per patient):")
+    print(f"  {'Combination':16s} | {'DSC p-value':26s} | {'HD95 p-value':26s} | n")
+    print("-" * 88)
+    pool_a_d, pool_a_h, pool_b_d, pool_b_h = [], [], [], []
+    for combo_name, _ in TEST_COMBINATIONS:
+        a_d, a_h = _scores(dice_results, combo_name), _scores(hd95_results, combo_name)
+        b_d, b_h = ref_dice.get(combo_name, []), ref_hd95.get(combo_name, [])
+        _, pd_, nd = paired_wilcoxon(a_d, b_d)
+        _, ph_, _ = paired_wilcoxon(a_h, b_h)
+        print(f"  {combo_name:16s} | {_fmt_pvalue(pd_):26s} | {_fmt_pvalue(ph_):26s} | {nd}")
+        pool_a_d += list(a_d); pool_b_d += list(b_d)
+        pool_a_h += list(a_h); pool_b_h += list(b_h)
+    _, pd_o, nd_o = paired_wilcoxon(pool_a_d, pool_b_d)
+    _, ph_o, _ = paired_wilcoxon(pool_a_h, pool_b_h)
+    print("-" * 88)
+    print(f"  {'Overall':16s} | {_fmt_pvalue(pd_o):26s} | {_fmt_pvalue(ph_o):26s} | {nd_o}")
 # ═══════════════════════════════════════════════════════════════════════════════
 # 7.  FEATURE EXTRACTION FOR t-SNE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1541,6 +1621,11 @@ def parse_args():
     p.add_argument("--use_hgf", type=int, default=None, choices=[0, 1],
                    help="Override: enable(1)/disable(0) HGF (else follow --variant)")
 
+    p.add_argument("--compare_json", default=None,
+                   help="Path to another method's per_subject_scores.json. When given, "
+                        "a paired two-sided Wilcoxon signed-rank test (p<0.05) is run "
+                        "against it, per combination and overall.")
+
     return resolve_ablation(p.parse_args())
 
 
@@ -1654,14 +1739,11 @@ def main():
 
     logging.info("=" * 70)
     dice_results, hd95_results = test_all_combinations(
-        model, test_loader, args, args.savepath,
-        )
-    print_results(dice_results, hd95_results,
-                  )
-    save_results_json(dice_results, hd95_results, args.savepath,
-                      )
-    save_results_latex(dice_results, hd95_results, args.savepath,
-                       )
+        model, test_loader, args, args.savepath)
+    print_results(dice_results, hd95_results)
+    save_results_json(dice_results, hd95_results, args.savepath)
+    save_per_subject_scores(dice_results, hd95_results, args.savepath)
+    statistical_significance_test(dice_results, hd95_results, args)
 
     # ══════════════════════════════════════════════════════════════════════
     # B.  EXTRACT FEATURES FOR t-SNE

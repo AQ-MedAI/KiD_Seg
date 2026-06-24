@@ -24,7 +24,7 @@ Modality groups (mask logic unchanged):
 
 Usage:
   python train_rfnet_liver.py --datapath /path/to/preprocess_nii_256x32_1 \
-                               --savepath ./output --resize_x 128 --resize_y 128 --resize_z 16
+                               --savepath ./output --resize_x 256 --resize_y 256 --resize_z 32
 
 ══════════════════════════════════════════════════════════════════════════════
 TERMINAL COMMANDS — RFNet training
@@ -185,7 +185,7 @@ def discover_patients(root: str):
     return patients
 
 
-def split_patients(patients, train_ratio=0.8, val_ratio=0.1):
+def split_patients(patients, train_ratio=0.7, val_ratio=0.2):
     n = len(patients)
     n_train = max(1, int(round(n * train_ratio)))
     n_val   = max(1, int(round(n * val_ratio)))
@@ -208,11 +208,10 @@ def resize_volume(vol, target_shape, order=1):
 
 
 def normalize_volume(vol):
-    mask = vol > 0
-    if mask.sum() == 0:
+    vmin, vmax = float(vol.min()), float(vol.max())
+    if vmax - vmin < 1e-8:
         return vol
-    m, s = vol[mask].mean(), vol[mask].std() + 1e-8
-    return (vol - m) / s
+    return (vol - vmin) / (vmax - vmin)
 
 
 def preprocess_patient(root, name, shape):
@@ -786,11 +785,11 @@ def test_all_combinations(model, test_loader, args, save_dir):
         m, s, md = arr.mean(), arr.std(), np.median(arr)
         results[combo_name] = {"mean": m, "std": s, "median": md, "scores": arr.tolist()}
         all_combo_dice.append(arr)
-        logging.info(f"  {combo_name}: ${m:.3f}\ +/- {s:.3f}({md:.3f})")
+        logging.info(f"  {combo_name}: {m:.3f} ± {s:.3f} ({md:.3f})")
 
     flat = np.concatenate(all_combo_dice)
     results["Average"] = {"mean": flat.mean(), "std": flat.std(), "median": np.median(flat)}
-    logging.info(f"  Average: ${flat.mean():.3f}\ +/- {flat.std():.3f}({np.median(flat):.3f})")
+    logging.info(f"  Average: {flat.mean():.3f} ± {flat.std():.3f} ({np.median(flat):.3f})")
 
     sav = {k: {kk: float(vv) for kk, vv in v.items() if kk != "scores"}
            for k, v in results.items()}
@@ -958,9 +957,9 @@ def _print_results(results):
     print("=" * 70)
     for name, _ in TEST_COMBINATIONS:
         r = results[name]
-        print(f"  {name:25s}:  ${r['mean']:.3f}\ +/- {r['std']:.3f}({r['median']:.3f})")
+        print(f"  {name:25s}:  {r['mean']:.3f} ± {r['std']:.3f} ({r['median']:.3f})")
     r = results["Average"]
-    print(f"  {'Average':25s}:  ${r['mean']:.3f}\ +/- {r['std']:.3f}({r['median']:.3f})")
+    print(f"  {'Average':25s}:  {r['mean']:.3f} ± {r['std']:.3f} ({r['median']:.3f})")
     print("=" * 70)
 
 
