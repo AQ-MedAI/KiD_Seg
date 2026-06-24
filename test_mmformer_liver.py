@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Ant Group and the KiD-Seg authors.
+# Licensed under the Creative Commons Attribution-NonCommercial 4.0 International
+# License (CC BY-NC 4.0). See the LICENSE file or
+# https://creativecommons.org/licenses/by-nc/4.0/ for details.
+# For research and non-commercial use only; not for clinical use.
 """
 Standalone test.py – mmFormer for multi-modal liver segmentation with missing modalities.
 

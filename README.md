@@ -288,6 +288,25 @@ meantime, please cite the accepted version:
 
 ---
 
+## License
+
+This project is released under the **Creative Commons Attribution-NonCommercial 4.0
+International (CC BY-NC 4.0)** license — see [`LICENSE`](LICENSE) for the full text.
+
+Copyright © 2026 Ant Group and the KiD-Seg authors.
+
+- **Free for research and non-commercial use**, with attribution.
+- **Commercial use requires a separate license** — please contact the authors / Ant Group.
+- Third-party components (the DC-Seg backbone; the RFNet, mmFormer, and M3AE baselines)
+  and the **LLD-MMRI** dataset remain subject to their own licenses and terms of use;
+  this license covers only the original code in this repository.
+
+> **Disclaimer.** This software is provided for research purposes only. It is **not a
+> medical device and is not intended for clinical use, diagnosis, or treatment**, and is
+> distributed "AS IS" without warranty of any kind (see Section 5 of the `LICENSE`).
+
+---
+
 ## Acknowledgements
 
 This work was supported by Ant Group, the Ant Group Research Intern Program, and
