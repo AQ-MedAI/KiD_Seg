@@ -1,13 +1,12 @@
 # KiD-Seg: Kinetic-Disentangled Contrastive Learning with Anchor Guidance for Incomplete Multi-Modal Liver Tumor Segmentation
 
-Official implementation of **KiD-Seg**, a unified framework for robust liver-tumor
-segmentation under *group-wise* missing MRI modalities. KiD-Seg treats T2-weighted
-imaging (`T2WI`) as a permanent anatomical anchor and models the remaining sequences
-as atomic modality groups, achieving the best overall and full-modality median Dice on
-the 498-case LLD-MMRI dataset.
+Official implementation of **KiD-Seg** (MICCAI 2026), a unified framework for robust liver-tumor
+segmentation under *group-wise* missing MRI modalities. KiD-Seg treats T2-weighted imaging (`T2WI`) as a
+permanent anatomical anchor and models the remaining sequences as atomic modality groups, achieving the
+best overall and full-modality median Dice on the 498-case LLD-MMRI dataset.
 
-This repository contains standalone training/testing scripts for the proposed model,
-its ablations, and three state-of-the-art baselines.
+This repository contains the proposed model and its ablation study (Table 1 of the paper): one training
+script and one test script cover the DC-Seg baseline, + AGCL, + AGCL + DKD and the full KiD-Seg model.
 
 ---
 
@@ -15,16 +14,15 @@ its ablations, and three state-of-the-art baselines.
 
 KiD-Seg combines three components on top of a tri-branch DC-Seg backbone:
 
-1. **AGCL — Asymmetric Anchor-Guided Contrastive Learning.** A one-way InfoNCE
-   (with stop-gradient on the anchor) pulls auxiliary modalities toward the
-   high-fidelity `T2WI` embedding, insulating shared anatomy from distortion-prone
-   sequences.
+1. **AGCL — Asymmetric Anchor-Guided Contrastive Learning.** A one-way InfoNCE (with stop-gradient on the
+   anchor) pulls auxiliary modalities toward the high-fidelity `T2WI` embedding, insulating shared anatomy
+   from distortion-prone sequences.
 2. **DKD — Differential Kinetic Disentanglement.** Phase-to-baseline difference maps
-   (`ΔI = I^phase − I^C-pre`) are encoded and aggregated by cross-phase attention into a
-   kinetic feature, supervised by a supervised contrastive loss (KCL).
-3. **HGF — Hierarchical Atomic-Group Fusion.** Intra-group attention pooling followed
-   by `T2WI`-queried masked cross-attention, with completeness-aware self-distillation
-   (KL between a full-modality teacher pass and an incomplete student pass).
+   (`ΔI = I^phase − I^C-pre`) are encoded and aggregated by cross-phase attention into a kinetic feature,
+   supervised by a supervised contrastive loss (KCL) and injected into the fused decoder through a gated residual.
+3. **HGF — Hierarchical Atomic-Group Fusion.** Intra-group attention pooling followed by `T2WI`-queried
+   masked cross-attention at every decoder scale, with completeness-aware self-distillation (KL between a
+   full-modality teacher pass and an incomplete student pass).
 
 ### Modality groups
 
@@ -35,8 +33,8 @@ KiD-Seg combines three components on top of a tri-branch DC-Seg backbone:
 | `G3`  | `DWI` | diffusion-weighted imaging |
 | `G4`  | `InPhase`, `OutPhase` | Dixon |
 
-At inference, the same group-aware fusion handles any valid block set
-(`G1`-only … all 8 modalities) **without retraining**.
+At inference, the same group-aware fusion handles any valid block set (`G1`-only … all 8 modalities)
+**without retraining**; every test run evaluates all 8 combinations.
 
 ---
 
@@ -44,25 +42,16 @@ At inference, the same group-aware fusion handles any valid block set
 
 ```
 .
-├── train_kidseg.py            # Proposed model + ablations (--variant baseline|agcl|agcl_dkd|full)
-├── test_kidseg.py             # Evaluation for the proposed model / ablations
-├── train_rfnet_liver.py       # SOTA baseline: RFNet
-├── test_rfnet_liver.py
-├── train_mmformer_liver.py    # SOTA baseline: mmFormer
-├── test_mmformer_liver.py
-├── train_m3ae_liver.py        # SOTA baseline: M3AE (two-stage: pretrain + finetune)
-├── test_m3ae_liver.py
+├── train_kidseg.py   # Proposed model + ablations (--variant baseline|agcl|agcl_dkd|full)
+├── test_kidseg.py    # Evaluation: DSC + HD95 for all 8 combinations, Wilcoxon tests, t-SNE, figures
 └── README.md
 ```
-
-`train_kidseg.py` doubles as the **DC-Seg** baseline (`--variant baseline`) and the
-**Full KiD-Seg** model (`--variant full`).
 
 ---
 
 ## Installation
 
-Tested with Python 3.12, PyTorch 2.6 (CUDA 12.x), on Linux and Windows.
+Tested with Python 3.12 and PyTorch 2.6 (CUDA 12.x).
 
 ```bash
 conda create -n kidseg python=3.12 -y
@@ -75,31 +64,18 @@ pip install torch --index-url https://download.pytorch.org/whl/cu126
 pip install numpy nibabel scipy scikit-learn matplotlib
 ```
 
-`requirements.txt`:
-
-```
-torch>=2.1
-numpy
-nibabel
-scipy
-scikit-learn
-matplotlib
-```
-
-A CUDA GPU is required. The paper uses a single NVIDIA A100 (80 GB) at 256×256×32;
-the code also runs on smaller GPUs at reduced resolution (see *Quick demo*).
+A CUDA GPU is required. The paper trains on a single NVIDIA A100 (80 GB).
 
 ---
 
-## Dataset preparation
+## Dataset
 
-Experiments use the **LLD-MMRI** cohort (Lou et al.; 498 cases, 8 MRI modalities).
-Volumes are resampled to **256×256×32**
-(1.4×1.4×1.7 mm), SyN-registered to the common `C-pre` space, and min–max normalized
-per modality (the loader applies the resize + normalization for you).
+Experiments use the **LLD-MMRI** cohort (Lou et al.; 498 cases, 8 MRI modalities). Volumes are resampled
+to **256×256×32** (1.4×1.4×1.7 mm), SyN-registered with their annotations to the common `C-pre` space, and
+min–max normalised per modality (the scripts apply the resize and normalisation when loading).
 
-Organize each patient as follows. Every patient needs an `images/` and a `labels/`
-sub-folder, each containing one NIfTI per modality named `<patient>_<modality>.nii.gz`:
+Organise each patient as follows — an `images/` and a `labels/` sub-folder, each containing one NIfTI per
+modality named `<patient>_<modality>.nii.gz`:
 
 ```
 <datapath>/
@@ -114,57 +90,35 @@ sub-folder, each containing one NIfTI per modality named `<patient>_<modality>.n
 │   │   ├── <patient_id>_InPhase.nii.gz
 │   │   └── <patient_id>_OutPhase.nii.gz
 │   └── labels/
-│       ├── <patient_id>_T2WI.nii.gz      # tumor mask used for supervision (binarized > 0)
-│       └── ... (one per modality; registered to the same space)
+│       ├── <patient_id>_T2WI.nii.gz      # tumour mask used for supervision (binarised > 0.5)
+│       └── ...                           # one per modality (the same registered mask)
 └── ...
 ```
 
-Notes:
-- Segmentation is **binary** (tumor vs. background); the supervision mask is the
-  `T2WI` label, binarized at `> 0.5`.
-- A label file is expected for every modality (the patient is skipped during discovery
-  otherwise); these are the same registered mask.
-- Patients are split **7:2:1** (train/val/test) deterministically at the patient level;
-  test-set results are reported.
-
----
-
-## Quick demo (small GPU, synthetic-scale settings)
-
-To verify the pipeline end-to-end without the full dataset/compute, train a few epochs
-at reduced resolution and test:
-
-```bash
-python train_kidseg.py --variant full --datapath ./data/preprocess_nii_256x32 \
-    --savepath ./out/kidseg_full --num_epochs 5 --resize_x 64 --resize_y 64 --resize_z 32
-
-python test_kidseg.py  --variant full --datapath ./data/preprocess_nii_256x32 \
-    --checkpoint ./out/kidseg_full/model_best.pth --savepath ./out/kidseg_full/test \
-    --resize_x 64 --resize_y 64 --resize_z 32
-```
-
-For paper-faithful runs, drop the `--resize_*` overrides (defaults are 256×256×32) and
-use the default `--num_epochs 200`.
+* Segmentation is **binary** (tumour vs. background).
+* A label file is expected for every modality (patients missing any file are skipped during discovery).
+* Patients are split **7:2:1** (train / val / test) deterministically at the patient level; test-set
+  results are reported.
 
 ---
 
 ## Training
 
-Default hyperparameters already match the paper: **AdamW** (lr `2e-4`, weight decay
-`1e-5`), **cosine annealing**, **200 epochs**, **batch size 2**, **256×256×32**, shared
-encoder depth **L = 4**. Each run saves `model_best.pth` (best val Dice) and
-`model_last.pth` to its `--savepath`.
+Default hyper-parameters are those of the paper: **AdamW** (lr `2e-4`, weight decay `1e-5`),
+**cosine annealing**, **200 epochs**, **batch size 2**, **256×256×32**, shared encoder depth **L = 4**,
+structured group dropout with `G1` always present. Each run saves `model_best.pth` (best validation Dice)
+and `model_last.pth` to `--savepath`.
 
-### Proposed model & ablations (Table 1)
+### Proposed model and ablations (Table 1)
 
 `train_kidseg.py --variant {baseline,agcl,agcl_dkd,full}`:
 
-| Variant     | Modules enabled (AGCL, DKD, HGF) | Paper row |
-|-------------|----------------------------------|-----------|
-| `baseline`  | ✗ ✗ ✗ | Baseline (DC-Seg) |
-| `agcl`      | ✓ ✗ ✗ | + AGCL |
-| `agcl_dkd`  | ✓ ✓ ✗ | + AGCL + DKD |
-| `full`      | ✓ ✓ ✓ | **Full KiD-Seg** |
+| Variant     | AGCL | DKD | HGF | Paper row |
+|-------------|------|-----|-----|-----------|
+| `baseline`  | ✗ | ✗ | ✗ | Baseline (DC-Seg) |
+| `agcl`      | ✓ | ✗ | ✗ | + AGCL |
+| `agcl_dkd`  | ✓ | ✓ | ✗ | + AGCL + DKD |
+| `full`      | ✓ | ✓ | ✓ | **Full KiD-Seg** |
 
 ```bash
 for V in baseline agcl agcl_dkd full; do
@@ -173,77 +127,47 @@ done
 # Default output dir: ./output_dcseg_liver_a2cl_dkd_hac_<variant>/
 ```
 
-### SOTA baselines (Table 2)
-
-```bash
-python train_rfnet_liver.py    --datapath ./data/preprocess_nii_256x32    # -> ./output_rfnet_liver/
-python train_mmformer_liver.py --datapath ./data/preprocess_nii_256x32    # -> ./output_mmformer_liver/
-python train_m3ae_liver.py     --datapath ./data/preprocess_nii_256x32 \
-    --pretrain_epochs 100 --num_epochs 200                                # -> ./output_m3ae_liver/
-```
-
-M3AE is two-stage: self-supervised pretraining (`--pretrain_epochs`) followed by
-fine-tuning (`--num_epochs`).
+Useful options: `--savepath DIR`, `--use_agcl/--use_dkd/--use_hgf {0,1}` (override the preset for custom
+combinations), `--kcl_detach {0,1}` (default `1`, the setting used for the paper: the kinetic feature is
+detached inside `L_KCL`), `--no_amp`, `--no_checkpoint`. Batch size must be ≥ 2 because the AGCL InfoNCE
+denominator is taken over the batch.
 
 ---
 
 ## Evaluation
 
-Each test script loads the trained checkpoint, evaluates **all 8 group-wise modality
-combinations** (plus the pooled Overall), and reports **DSC** and **HD₉₅ (mm)** as
-`mean ± std (median)` over every test subject — no per-patient filtering, no daggers.
-It also extracts t-SNE features and writes a per-patient qualitative figure
-(Input | combinations | overlays).
+`test_kidseg.py` loads the trained checkpoint, evaluates **all 8 group-wise modality combinations** (plus
+the pooled Overall) and reports **DSC** and **HD95 (mm)** as `mean ± std (median)` over every test subject.
+It also extracts t-SNE features and writes one qualitative figure per patient (8 modalities |
+8 combination overlays | t-SNE) on the axial slice with the largest tumour area.
 
 ```bash
-# Proposed model / ablations (match --variant to the trained checkpoint)
-python test_kidseg.py        --variant full --datapath ./data/preprocess_nii_256x32
-
-# SOTA baselines
-python test_rfnet_liver.py    --datapath ./data/preprocess_nii_256x32
-python test_mmformer_liver.py --datapath ./data/preprocess_nii_256x32
-python test_m3ae_liver.py     --datapath ./data/preprocess_nii_256x32
+# match --variant to the trained checkpoint (a mismatch raises an error)
+python test_kidseg.py --variant full --datapath ./data/preprocess_nii_256x32
 ```
 
-Checkpoints are auto-discovered from the matching default output dir; override with
-`--checkpoint` / `--savepath` as needed.
+Checkpoints are auto-discovered from the matching default output dir; override with `--checkpoint` /
+`--savepath`. `--max_vis_patients N` limits the per-patient t-SNE and figures to the first N test patients
+(metrics always use every test patient).
 
 ### Outputs
 
-Each test run writes to its `--savepath`:
-
 | File | Contents |
 |------|----------|
-| `test_results.json` | Per-combination & Overall DSC/HD₉₅ summary |
-| `per_subject_scores.json` | Per-subject DSC/HD₉₅ for every combination (for significance tests) |
-| `test.log` | Full evaluation log |
+| `test_results.json` | Per-combination & Overall DSC/HD95 summary |
+| `per_subject_scores.json` | Per-subject DSC/HD95 for every combination (for significance tests) |
+| `test.log` | Full evaluation log including the significance tables |
 | `visualizations/` | Per-patient qualitative + t-SNE figures |
 
----
+### Statistical significance (Wilcoxon signed-rank)
 
-## Statistical significance (Wilcoxon signed-rank)
-
-Significance is assessed with a **two-sided Wilcoxon signed-rank test (p < 0.05)**,
-reported as **p-values** (no dagger/star markers). Every test run prints, for the model
-under test, a within-model analysis (each combination vs. full-modality). To reproduce
-the paper's method-vs-method comparison, point one model at another's saved per-subject
-scores via `--compare_json`:
+Significance is assessed with a **two-sided Wilcoxon signed-rank test (p < 0.05)**. Every test run prints a
+within-model analysis (each combination vs. full-modality). To compare two models paired per patient, point
+one run at the other's saved per-subject scores:
 
 ```bash
-# e.g. KiD-Seg (full) vs. RFNet, paired per patient, per combination + pooled Overall
-python test_kidseg.py --variant full --datapath ./data/preprocess_nii_256x32 \
-    --compare_json ./output_rfnet_liver/test_output/per_subject_scores.json
-```
-
-Example output:
-
-```
-STATISTICAL SIGNIFICANCE - two-sided Wilcoxon signed-rank test (p < 0.05)
-(B) This model vs. reference '.../rfnet/.../per_subject_scores.json' (paired per patient):
-  Combination      | DSC p-value                | HD95 p-value               | n
-  G1+G2+G3+G4      | 0.0143 (significant)       | 0.21 (n.s.)                | 50
-  ...
-  Overall          | 0.0008 (significant)       | 0.03 (significant)         | 400
+python test_kidseg.py --variant baseline --datapath ./data/preprocess_nii_256x32 \
+    --compare_json ./output_dcseg_liver_a2cl_dkd_hac_full/test_output/per_subject_scores.json
 ```
 
 ---
@@ -257,21 +181,26 @@ STATISTICAL SIGNIFICANCE - two-sided Wilcoxon signed-rank test (p < 0.05)
 | Batch size | 2 |
 | Resolution | 256 × 256 × 32 (1.4 × 1.4 × 1.7 mm) |
 | Encoder depth | L = 4 |
-| Classes / modalities | 2 (binary tumor) / 8 |
+| Classes / modalities | 2 (binary tumour) / 8 |
 | Split | 7 : 2 : 1 (patient-level) |
-| Metrics | DSC, HD₉₅ — `mean ± std (median)` |
+| Metrics | DSC, HD₉₅ (mm) — `mean ± std (median)` |
 | Significance | Two-sided Wilcoxon signed-rank, p < 0.05 |
 
-Model sizes (at 256×256×32): RFNet 14.91M · mmFormer ~250M · M3AE 2.20M ·
-DC-Seg 76.79M · KiD-Seg 77.02M (only +0.23M over DC-Seg).
+Model sizes at 256×256×32: DC-Seg 76.79 M · + AGCL 76.79 M · + AGCL + DKD 76.92 M · KiD-Seg 77.02 M
+(only +0.23 M over DC-Seg).
+
+### Ablation results (Table 1, Overall = pooled over all 8 combinations)
+
+| Method variant | DSC ↑ | HD₉₅ (mm) ↓ |
+|---|---|---|
+| Baseline (DC-Seg) | 0.648 ± 0.304 (0.764) | 11.559 ± 21.085 (5.000) |
+| + AGCL | 0.677 ± 0.290 (0.769) | 10.447 ± 20.188 (4.899) |
+| + AGCL + DKD | 0.681 ± 0.278 (0.773) | 15.200 ± 28.369 (5.099) |
+| + AGCL + DKD + HGF (Full KiD-Seg) | **0.670 ± 0.291 (0.781)** | **8.737 ± 16.189 (4.123)** |
 
 ---
 
 ## Citation
-
-KiD-Seg has been **accepted to MICCAI 2026**. The official proceedings citation
-(volume, pages, DOI) is not yet available and will be added once published. In the
-meantime, please cite the accepted version:
 
 ```bibtex
 @inproceedings{khor2026kidseg,
@@ -281,8 +210,7 @@ meantime, please cite the accepted version:
                Wang, Junyi and Bai, Xiaoyu and Shi, Yinghong and Lu, Le},
   booktitle = {Medical Image Computing and Computer-Assisted Intervention -- MICCAI 2026},
   year      = {2026},
-  publisher = {Springer},
-  note      = {To appear}
+  publisher = {Springer}
 }
 ```
 
@@ -290,26 +218,23 @@ meantime, please cite the accepted version:
 
 ## License
 
-This project is released under the **Creative Commons Attribution-NonCommercial 4.0
-International (CC BY-NC 4.0)** license — see [`LICENSE`](LICENSE) for the full text.
+This project is released under the **Creative Commons Attribution-NonCommercial 4.0 International
+(CC BY-NC 4.0)** license (see the `LICENSE` file of the repository).
 
 Copyright © 2026 Ant Group and the KiD-Seg authors.
 
-- **Free for research and non-commercial use**, with attribution.
-- **Commercial use requires a separate license** — please contact the authors / Ant Group.
-- Third-party components (the DC-Seg backbone; the RFNet, mmFormer, and M3AE baselines)
-  and the **LLD-MMRI** dataset remain subject to their own licenses and terms of use;
+* **Free for research and non-commercial use**, with attribution.
+* **Commercial use requires a separate license** — please contact the authors / Ant Group.
+* The DC-Seg backbone and the **LLD-MMRI** dataset remain subject to their own licenses and terms of use;
   this license covers only the original code in this repository.
 
-> **Disclaimer.** This software is provided for research purposes only. It is **not a
-> medical device and is not intended for clinical use, diagnosis, or treatment**, and is
-> distributed "AS IS" without warranty of any kind (see Section 5 of the `LICENSE`).
+> **Disclaimer.** This software is provided for research purposes only. It is **not a medical device and is
+> not intended for clinical use, diagnosis, or treatment**, and is distributed "AS IS" without warranty of any kind.
 
 ---
 
 ## Acknowledgements
 
-This work was supported by Ant Group, the Ant Group Research Intern Program, and
-Zhongshan Hospital, Fudan University. The framework builds on **DC-Seg** (Li et al., 2025)
-and is evaluated on the **LLD-MMRI** dataset (Lou et al., 2025); the baselines reimplement
-**RFNet**, **mmFormer**, and **M3AE**. See the paper for full references.
+This work was supported by Ant Group, the Ant Group Research Intern Program, and Zhongshan Hospital, Fudan
+University. The framework builds on **DC-Seg** (Li et al., 2025) and is evaluated on the **LLD-MMRI** dataset
+(Lou et al., 2025).
